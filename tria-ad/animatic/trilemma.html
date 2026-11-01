@@ -1,0 +1,225 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+@font-face{font-family:"Lexend Deca";src:url(assets/lexend.woff2) format("woff2");font-weight:100 900}
+@font-face{font-family:"Manrope";src:url(assets/manrope.woff2) format("woff2");font-weight:200 800}
+html,body{margin:0;background:#fff}
+canvas{display:block}
+</style></head>
+<body><canvas id="c" width="1920" height="1080"></canvas>
+<script>
+const W=1920,H=1080,CX=960,CY=540,SH=600/517,R=258.5,deg=Math.PI/180;
+const RED='#FF0045',NAVY='#1D2038',SLATE='#7A95A5';
+const c=document.getElementById('c'),ctx=c.getContext('2d');
+
+// ---------- helpers ----------
+const clamp=(x,a=0,b=1)=>Math.min(b,Math.max(a,x));
+const lerp=(a,b,t)=>a+(b-a)*t;
+const eio=t=>t<.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2;      // ease in-out cubic
+const eo=t=>1-Math.pow(1-t,3);                          // ease out cubic
+const ph=(t,a,b)=>clamp((t-a)/(b-a));                   // phase 0..1
+const env=(t,a,b,c2,d)=>eio(ph(t,a,b))*(1-eio(ph(t,c2,d))); // rise a..b, fall c..d
+
+// ---------- geometry (shape units, centred on circle centre) ----------
+const T=[0,152.205-258.5],RP=[350.525-258.5,311.634-258.5],LP=[166.434-258.5,311.634-258.5];
+const TRI_LEN=3*Math.hypot(RP[0]-LP[0],RP[1]-LP[1]);
+const imgs={};
+const W8=[
+ {key:'access', label:'Access', a0:150*deg,a1:270*deg,inner:[LP,T],color:NAVY, bis:210*deg,focus:[.52,.33],align:'right'},
+ {key:'quality',label:'Quality',a0:-90*deg,a1:30*deg, inner:[T,RP],color:RED,  bis:-30*deg,focus:[.73,.30],align:'left'},
+ {key:'cost',   label:'Cost',   a0:30*deg, a1:150*deg,inner:[RP,LP],color:SLATE,bis:90*deg, focus:[.52,.38],align:'center'},
+];
+for(const w of W8){ // bbox + centroid by sampling
+  const pts=[w.inner[0],w.inner[1]];
+  for(let i=0;i<=24;i++){const a=lerp(w.a0,w.a1,i/24);pts.push([R*Math.cos(a),R*Math.sin(a)]);}
+  const xs=pts.map(p=>p[0]),ys=pts.map(p=>p[1]);
+  w.bb=[Math.min(...xs),Math.min(...ys),Math.max(...xs),Math.max(...ys)];
+  w.cen=[(w.bb[0]+w.bb[2])/2,(w.bb[1]+w.bb[3])/2];
+}
+function wedgePath(w){
+  ctx.beginPath();ctx.moveTo(...w.inner[0]);
+  ctx.lineTo(R*Math.cos(w.a0),R*Math.sin(w.a0));
+  ctx.arc(0,0,R,w.a0,w.a1,false);
+  ctx.lineTo(...w.inner[1]);ctx.closePath();
+}
+function triPath(){ctx.beginPath();ctx.moveTo(...T);ctx.lineTo(...RP);ctx.lineTo(...LP);ctx.closePath();}
+function cover(img,x,y,w,h,fx,fy,zoom){ // draw img covering box, focal point centred
+  const s=Math.max(w/img.width,h/img.height)*zoom;
+  const iw=img.width*s,ih=img.height*s;
+  let ox=x+w/2-fx*iw,oy=y+h/2-fy*ih;
+  ox=Math.min(x,Math.max(x+w-iw,ox));oy=Math.min(y,Math.max(y+h-ih,oy));
+  ctx.drawImage(img,ox,oy,iw,ih);
+}
+
+// ---------- per-wedge state over time ----------
+function wedgeState(i,t){
+  const s={k:1,d:0,gray:0,bright:1,alpha:1,reveal:1};
+  // intro reveal
+  const r=eo(ph(t,4.0+i*.28,5.8+i*.28)); s.reveal=r; s.alpha=clamp(r*1.4);
+  const key=W8[i].key;
+  // 8–13: expand access, costs rise (cost squeezed)
+  const a1=env(t,8.2,9.8,13.0,14.6);
+  if(key==='access'){s.k+=.13*a1;s.d+=26*a1;}
+  if(key==='cost'){s.k-=.14*a1;s.d-=10*a1;s.gray+=a1;s.bright-=.12*a1;}
+  // 13–21: cut costs, quality slips
+  const a2=env(t,13.6,15.2,20.2,21.6);
+  if(key==='cost'){s.k-=.06*a2;s.d-=8*a2;}
+  if(key==='quality'){
+    s.k-=.10*a2;s.gray+=.9*a2;s.bright-=.22*a2;
+    const fl=ph(t,15.6,18.4)*(1-ph(t,18.4,19.2));        // gentle screen flicker
+    s.bright-=fl*.10*(.5+.5*Math.sin(t*23))*(.5+.5*Math.sin(t*7.3));
+  }
+  // 21–28: pressure shifts around the circle
+  const wob=env(t,21.0,22.4,26.6,28.0);
+  const ph3=2*Math.PI*(t-21)/2.4+i*2*Math.PI/3;
+  s.k+=.07*wob*Math.sin(ph3);s.d+=14*wob*Math.sin(ph3);
+  s.gray+=.55*wob*clamp(-Math.sin(ph3));
+  return s;
+}
+
+// ---------- scene ----------
+const lines=[ // VO guide (animatic only)
+ [0.6,4.6,'Every federal health decision comes down to three things.'],
+ [8.4,12.6,'Expand access, and costs rise.'],
+ [13.8,18.6,'Cut costs, and quality slips.'],
+ [21.4,26.8,'Improve one, and the pressure shifts to another.'],
+ [28.4,34.6,"Because the problem isn't on the surface. It's in the systems underneath."],
+ [35.2,39.0,'Tria Federal builds, modernizes, and operates those systems…'],
+];
+function camAt(t){
+  if(t<28) return 1;
+  if(t<31.5) return Math.exp(Math.log(22)*eio(ph(t,28,31.5)));
+  if(t<35) return 22;
+  if(t<39) return Math.exp(Math.log(22)*(1-eio(ph(t,35,39))));
+  return 1;
+}
+function rotAt(t){
+  let r=-24*deg*(1-eo(ph(t,3.8,6.8)));
+  r+=3.2*deg*env(t,21,22.4,26.6,28)*Math.sin(2*Math.PI*(t-21)/3.1);
+  return r;
+}
+function interiorDark(t){ // 0 white, 1 dark scene in triangle
+  if(t<28) return 0;
+  if(t<35) return eio(ph(t,28.1,29.6));
+  return 1-eio(ph(t,38.4,39.8));
+}
+
+function draw(t){
+  ctx.setTransform(1,0,0,1,0,0);ctx.globalAlpha=1;ctx.filter='none';
+  // background
+  const bg=ctx.createRadialGradient(CX,CY,100,CX,CY,1200);
+  bg.addColorStop(0,'#FFFFFF');bg.addColorStop(1,'#E4EAED');
+  ctx.fillStyle=bg;ctx.fillRect(0,0,W,H);
+
+  const cam=camAt(t),rot=rotAt(t);
+  const darkFull=(t>=31.5&&t<35);
+  if(!darkFull){
+    // ---- rings ----
+    ctx.save();ctx.translate(CX,CY);ctx.scale(SH*cam,SH*cam);
+    const rf=[1.265,1.563,1.853];
+    rf.forEach((f,i)=>{
+      const p=eo(ph(t,.15+i*.32,2.3+i*.32));
+      let rr=R*f*lerp(.55,1,p)+3*env(t,21,22.4,26.6,28)*Math.sin(t*3+i);
+      const g=ctx.createLinearGradient(-R*2,-R*2,R*2,R*2);
+      g.addColorStop(0,'rgba(255,0,69,0.06)');g.addColorStop(1,'rgba(255,0,69,0.75)');
+      ctx.globalAlpha=p;ctx.strokeStyle=g;ctx.lineWidth=1.6/(SH*cam);
+      ctx.beginPath();ctx.arc(0,0,rr,0,2*Math.PI);ctx.stroke();
+    });
+    // resolve: even pulses
+    if(t>39.2){for(let n=0;n<4;n++){
+      const q=((t-39.2)/1.6-n);if(q<0||q>1.4)continue;const qq=clamp(q/1.4);
+      ctx.globalAlpha=.55*(1-qq);ctx.strokeStyle=RED;ctx.lineWidth=2/(SH*cam);
+      ctx.beginPath();ctx.arc(0,0,R*lerp(1.02,2.1,eo(qq)),0,2*Math.PI);ctx.stroke();}}
+    ctx.restore();
+
+    // ---- wedges ----
+    ctx.save();ctx.translate(CX,CY);ctx.scale(SH*cam,SH*cam);ctx.rotate(rot);
+    const zoom=1.06+.06*(t/45);
+    W8.forEach((w,i)=>{
+      const s=wedgeState(i,t);if(s.alpha<=0)return;
+      ctx.save();
+      ctx.globalAlpha=s.alpha;
+      ctx.translate(Math.cos(w.bis)*s.d,Math.sin(w.bis)*s.d);
+      ctx.translate(...w.cen);ctx.scale(s.k,s.k);ctx.translate(-w.cen[0],-w.cen[1]);
+      ctx.beginPath();ctx.arc(0,0,lerp(60,R+2,s.reveal),0,2*Math.PI);ctx.clip();
+      wedgePath(w);ctx.clip();
+      ctx.filter=`grayscale(${clamp(s.gray)}) brightness(${s.bright})`;
+      const[x0,y0,x1,y1]=w.bb;
+      cover(imgs[w.key],x0,y0,x1-x0,y1-y0,w.focus[0],w.focus[1],zoom);
+      ctx.filter='none';
+      // brand tint from the outer edge
+      const ox=Math.cos(w.bis)*R,oy=Math.sin(w.bis)*R;
+      const g=ctx.createLinearGradient(ox,oy,ox*.15,oy*.15);
+      g.addColorStop(0,w.color+'B3');g.addColorStop(.55,w.color+'00');
+      ctx.fillStyle=g;ctx.fillRect(x0,y0,x1-x0,y1-y0);
+      ctx.restore();
+    });
+    // ---- centre triangle ----
+    const dk=interiorDark(t);
+    ctx.save();triPath();ctx.clip();
+    ctx.fillStyle='#FFFFFF';ctx.fillRect(-R,-R,2*R,2*R);
+    if(dk>0){ctx.setTransform(1,0,0,1,0,0);ctx.globalAlpha=dk;cover(imgs.dark,0,0,W,H,.4,.4,1.04+.04*ph(t,28,39));}
+    ctx.restore();
+    const draw3=eio(ph(t,1.2,3.6));
+    ctx.save();triPath();ctx.strokeStyle=RED;ctx.lineJoin='round';
+    ctx.lineWidth=3.2/(SH*cam);ctx.setLineDash([TRI_LEN*draw3,TRI_LEN]);ctx.stroke();ctx.restore();
+    ctx.restore();
+
+    // ---- wedge labels (screen space) ----
+    const la=eio(ph(t,6.6,7.8))*(1-eio(ph(t,27.4,28.4)))+eio(ph(t,39.6,40.6))*(1-eio(ph(t,44,44.8)));
+    if(la>0&&cam<1.5){
+      ctx.font='300 34px "Lexend Deca"';ctx.textBaseline='middle';
+      W8.forEach((w,i)=>{
+        const s=wedgeState(i,t);const a=w.bis+rot;
+        const dist=(R*SH+64)+s.d*SH;
+        let x=CX+Math.cos(a)*dist,y=CY+Math.sin(a)*dist;
+        if(w.key==='cost')y+=12;
+        ctx.globalAlpha=la*(1-.55*clamp(s.gray));ctx.fillStyle=NAVY;ctx.textAlign=w.align;
+        ctx.fillText(w.label,x,y);
+        // small red marker
+        const tw=ctx.measureText(w.label).width;
+        const mx=w.align==='right'?x-tw-22:w.align==='left'?x-22:x-tw/2-22;
+        ctx.fillStyle=RED;ctx.fillRect(mx,y-1.5,12,3);
+      });
+      ctx.globalAlpha=1;
+    }
+  } else {
+    cover(imgs.dark,0,0,W,H,.4,.4,1.04+.04*ph(t,28,39));
+  }
+
+  // ---- on-screen lines ----
+  ctx.setTransform(1,0,0,1,0,0);ctx.textAlign='left';ctx.textBaseline='alphabetic';
+  const o1=env(t,22.0,23.0,26.8,27.8);
+  if(o1>0){ctx.globalAlpha=o1;ctx.fillStyle=NAVY;ctx.font='300 60px "Lexend Deca"';
+    ctx.letterSpacing='-1px';
+    ctx.fillText('The tradeoffs are',110,170-8*(1-o1));ctx.fillText('built into the system.',110,244-8*(1-o1));}
+  const res=[['Safeguarding cost.',39.9],['Improving quality.',40.6],['Expanding access.',41.3]];
+  res.forEach(([s,a],i)=>{const o=eio(ph(t,a,a+.8))*(1-eio(ph(t,44.2,45)));
+    if(o<=0)return;ctx.globalAlpha=o;ctx.fillStyle=NAVY;ctx.font='300 50px "Lexend Deca"';
+    ctx.fillText(s,110,150+i*66-8*(1-o));});
+  const tog=eio(ph(t,42.2,43.0))*(1-eio(ph(t,44.2,45)));
+  if(tog>0){ctx.globalAlpha=tog;ctx.fillStyle=RED;ctx.font='400 50px "Lexend Deca"';ctx.fillText('Together.',110,150+3*66+8);}
+  ctx.letterSpacing='0px';
+
+  // ---- VO guide (animatic only) ----
+  for(const[a,b,s]of lines){const o=env(t,a,a+.3,b-.3,b);if(o<=0)continue;
+    ctx.globalAlpha=o*.9;ctx.font='500 22px Manrope';ctx.textAlign='center';
+    ctx.fillStyle=(t>29.4&&t<38.6)?'rgba(255,255,255,.85)':'rgba(29,32,56,.55)';
+    ctx.fillText('VO: '+s,W/2,1040);}
+  ctx.globalAlpha=.5;ctx.font='500 16px Manrope';ctx.textAlign='right';
+  ctx.fillStyle=(t>29.4&&t<38.6)?'#fff':NAVY;
+  ctx.fillText('ANIMATIC · placeholder photos · '+t.toFixed(1)+'s',W-40,44);
+  // fade to white at end
+  const fo=ph(t,44.4,45);if(fo>0){ctx.globalAlpha=fo;ctx.fillStyle='#fff';ctx.fillRect(0,0,W,H);}
+  ctx.globalAlpha=1;
+}
+
+async function load(){
+  const L=(k,src)=>new Promise((res,rej)=>{const i=new Image();i.onload=()=>{imgs[k]=i;res()};i.onerror=rej;i.src=src;});
+  await Promise.all([L('access','assets/access.jpg'),L('quality','assets/quality.jpg'),L('cost','assets/cost.jpg'),L('dark','assets/dark.jpg')]);
+  await document.fonts.load('300 40px "Lexend Deca"');await document.fonts.load('400 40px "Lexend Deca"');await document.fonts.load('500 20px Manrope');
+  window.ready=true;
+}
+load();
+window.frame=(t,q)=>{draw(t);return c.toDataURL('image/jpeg',q||0.92);};
+</script></body></html>
