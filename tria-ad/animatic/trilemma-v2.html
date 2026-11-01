@@ -1,0 +1,186 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+@font-face{font-family:"Lexend Deca";src:url(assets/lexend.woff2) format("woff2");font-weight:100 900}
+html,body{margin:0;background:#fff}
+canvas{display:block}
+</style></head>
+<body><canvas id="c" width="1920" height="1080"></canvas>
+<script>
+// v2: the Trilemma shape never moves or scales. All motion lives inside the wedges (video),
+// in brightness/colour emphasis, in the triangle edges, the rings and the camera.
+const W=1920,H=1080,CX=960,CY=540,SH=600/517,R=258.5,deg=Math.PI/180,FPS=30;
+const RED='#FF0045',NAVY='#1D2038',SLATE='#7A95A5';
+const c=document.getElementById('c'),ctx=c.getContext('2d');
+
+const clamp=(x,a=0,b=1)=>Math.min(b,Math.max(a,x));
+const lerp=(a,b,t)=>a+(b-a)*t;
+const eio=t=>t<.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2;
+const eo=t=>1-Math.pow(1-t,3);
+const ph=(t,a,b)=>clamp((t-a)/(b-a));
+const env=(t,a,b,c2,d)=>eio(ph(t,a,b))*(1-eio(ph(t,c2,d)));
+
+// exact geometry of Trialama_shape.svg (517 box), centred on the circle centre
+const T=[0,152.205-258.5],RP=[350.525-258.5,311.634-258.5],LP=[166.434-258.5,311.634-258.5];
+const TRI_LEN=3*Math.hypot(RP[0]-LP[0],RP[1]-LP[1]);
+const W8=[
+ {key:'access', n:237,speed:.85,a0:150*deg,a1:270*deg,inner:[LP,T], edge:[LP,T], color:NAVY, bis:210*deg,focus:[.50,.62],zoom:1.55},
+ {key:'quality',n:116,speed:.60,a0:-90*deg,a1:30*deg, inner:[T,RP], edge:[T,RP], color:RED,  bis:-30*deg,focus:[.40,.45],zoom:1.20},
+ {key:'cost',   n:367,speed:.80,a0:30*deg, a1:150*deg,inner:[RP,LP],edge:[RP,LP],color:SLATE,bis:90*deg, focus:[.50,.50],zoom:1.10},
+];
+for(const w of W8){
+  const pts=[w.inner[0],w.inner[1]];
+  for(let i=0;i<=24;i++){const a=lerp(w.a0,w.a1,i/24);pts.push([R*Math.cos(a),R*Math.sin(a)]);}
+  const xs=pts.map(p=>p[0]),ys=pts.map(p=>p[1]);
+  w.bb=[Math.min(...xs),Math.min(...ys),Math.max(...xs),Math.max(...ys)];
+}
+function wedgePath(w){
+  ctx.beginPath();ctx.moveTo(...w.inner[0]);
+  ctx.lineTo(R*Math.cos(w.a0),R*Math.sin(w.a0));
+  ctx.arc(0,0,R,w.a0,w.a1,false);
+  ctx.lineTo(...w.inner[1]);ctx.closePath();
+}
+function triPath(){ctx.beginPath();ctx.moveTo(...T);ctx.lineTo(...RP);ctx.lineTo(...LP);ctx.closePath();}
+function cover(img,x,y,w,h,fx,fy,zoom){
+  const s=Math.max(w/img.width,h/img.height)*zoom;
+  const iw=img.width*s,ih=img.height*s;
+  let ox=x+w/2-fx*iw,oy=y+h/2-fy*ih;
+  ox=Math.min(x,Math.max(x+w-iw,ox));oy=Math.min(y,Math.max(y+h-ih,oy));
+  ctx.drawImage(img,ox,oy,iw,ih);
+}
+
+// ---------- video frames (looped sequences, slowed with frame blending) ----------
+const cache=new Map();
+function loadImg(src){
+  if(cache.has(src))return cache.get(src);
+  const p=new Promise((res,rej)=>{const i=new Image();i.onload=()=>res(i);i.onerror=rej;i.src=src;});
+  cache.set(src,p);if(cache.size>60)cache.delete(cache.keys().next().value);
+  return p;
+}
+const fsrc=(w,i)=>`clips/${w.key}/${String((i%w.n)+1).padStart(4,'0')}.jpg`;
+async function videoFrames(w,t){
+  const f=t*FPS*w.speed,i=Math.floor(f);
+  const [a,b]=await Promise.all([loadImg(fsrc(w,i)),loadImg(fsrc(w,i+1))]);
+  return {a,b,mix:f-i};
+}
+
+// ---------- emphasis over time (no geometry changes) ----------
+function wedgeState(i,t){
+  const s={gray:0,bright:1,zoom:0,glow:0,reveal:eo(ph(t,4.0+i*.28,5.8+i*.28))};
+  const key=W8[i].key;
+  const a1=env(t,8.2,9.6,13.0,14.6);          // expand access, costs rise
+  if(key==='access'){s.bright+=.06*a1;s.zoom+=.22*a1;s.glow+=a1;}
+  if(key==='cost'){s.gray+=a1;s.bright-=.18*a1;}
+  const a2=env(t,13.6,15.0,20.2,21.6);         // cut costs, quality slips
+  if(key==='cost'){s.glow+=a2;s.zoom+=.18*a2;}
+  if(key==='quality'){
+    s.gray+=.9*a2;s.bright-=.24*a2;
+    const fl=ph(t,15.6,18.2)*(1-ph(t,18.2,19.0));
+    s.bright-=fl*.10*(.5+.5*Math.sin(t*23))*(.5+.5*Math.sin(t*7.3));
+  }
+  const wob=env(t,21.0,22.4,26.8,28.0);        // pressure shifts around the circle
+  const sp=Math.sin(2*Math.PI*(t-21)/3.0-i*2*Math.PI/3);
+  s.glow+=wob*clamp(sp);s.zoom+=.15*wob*clamp(sp);
+  s.gray+=.75*wob*clamp(-sp);s.bright-=.15*wob*clamp(-sp);
+  const res=env(t,39.4,40.6,44,45);            // together: all three, evenly
+  s.glow=Math.max(s.glow,.75*res);
+  return s;
+}
+function camAt(t){
+  if(t<28)return 1+.04*ph(t,4,28);              // slow push-in on the graphic
+  if(t<31.5)return 1.04*Math.exp(Math.log(21)*eio(ph(t,28,31.5)));
+  if(t<35)return 22;
+  if(t<39)return Math.exp(Math.log(22)*(1-eio(ph(t,35,39))));
+  return 1+.03*ph(t,39,45);
+}
+const rotAt=t=>-20*deg*(1-eo(ph(t,3.8,6.8)));
+function interiorDark(t){
+  if(t<28)return 0;
+  if(t<35)return eio(ph(t,28.1,29.6));
+  return 1-eio(ph(t,38.4,39.8));
+}
+
+async function draw(t){
+  const st=W8.map((w,i)=>wedgeState(i,t));
+  const frames=await Promise.all(W8.map(w=>videoFrames(w,t)));
+  ctx.setTransform(1,0,0,1,0,0);ctx.globalAlpha=1;ctx.filter='none';ctx.shadowBlur=0;
+  const bg=ctx.createRadialGradient(CX,CY,100,CX,CY,1200);
+  bg.addColorStop(0,'#FFFFFF');bg.addColorStop(1,'#E4EAED');
+  ctx.fillStyle=bg;ctx.fillRect(0,0,W,H);
+  const cam=camAt(t),rot=rotAt(t),u=SH*cam;
+
+  if(t>=31.5&&t<35){cover(imgs.dark,0,0,W,H,.4,.4,1.04+.04*ph(t,28,39));}
+  else{
+    // rings
+    ctx.save();ctx.translate(CX,CY);ctx.scale(u,u);
+    [1.265,1.563,1.853].forEach((f,i)=>{
+      const p=eo(ph(t,.15+i*.32,2.3+i*.32));
+      const g=ctx.createLinearGradient(-R*2,-R*2,R*2,R*2);
+      g.addColorStop(0,'rgba(255,0,69,0.06)');g.addColorStop(1,'rgba(255,0,69,0.75)');
+      ctx.globalAlpha=p;ctx.strokeStyle=g;ctx.lineWidth=1.6/u;
+      ctx.beginPath();ctx.arc(0,0,R*f*lerp(.55,1,p),0,2*Math.PI);ctx.stroke();
+    });
+    if(t>39.2)for(let n=0;n<4;n++){
+      const q=(t-39.2)/1.6-n;if(q<0||q>1.4)continue;const qq=clamp(q/1.4);
+      ctx.globalAlpha=.5*(1-qq);ctx.strokeStyle=RED;ctx.lineWidth=2/u;
+      ctx.beginPath();ctx.arc(0,0,R*lerp(1.0,2.1,eo(qq)),0,2*Math.PI);ctx.stroke();}
+    ctx.restore();
+
+    // wedges: fixed geometry, live video inside
+    ctx.save();ctx.translate(CX,CY);ctx.scale(u,u);ctx.rotate(rot);
+    W8.forEach((w,i)=>{
+      const s=st[i];if(s.reveal<=0)return;
+      ctx.save();ctx.globalAlpha=clamp(s.reveal*1.4);
+      ctx.beginPath();ctx.arc(0,0,lerp(60,R,s.reveal),0,2*Math.PI);ctx.clip();
+      wedgePath(w);ctx.clip();
+      ctx.filter=`grayscale(${clamp(s.gray)}) brightness(${s.bright})`;
+      const[x0,y0,x1,y1]=w.bb,z=w.zoom*(1+s.zoom),{a,b,mix}=frames[i];
+      cover(a,x0,y0,x1-x0,y1-y0,w.focus[0],w.focus[1],z);
+      ctx.globalAlpha*=mix;cover(b,x0,y0,x1-x0,y1-y0,w.focus[0],w.focus[1],z);
+      ctx.filter='none';ctx.globalAlpha=clamp(s.reveal*1.4);
+      const ox=Math.cos(w.bis)*R,oy=Math.sin(w.bis)*R;
+      const g=ctx.createLinearGradient(ox,oy,ox*.15,oy*.15);
+      g.addColorStop(0,w.color+'A6');g.addColorStop(.55,w.color+'00');
+      ctx.fillStyle=g;ctx.fillRect(x0,y0,x1-x0,y1-y0);
+      ctx.restore();
+    });
+    // centre triangle
+    const dk=interiorDark(t);
+    ctx.save();triPath();ctx.clip();
+    ctx.fillStyle='#FFFFFF';ctx.fillRect(-R,-R,2*R,2*R);
+    if(dk>0){ctx.setTransform(1,0,0,1,0,0);ctx.globalAlpha=dk;cover(imgs.dark,0,0,W,H,.4,.4,1.04+.04*ph(t,28,39));}
+    ctx.restore();
+    const d3=eio(ph(t,1.2,3.6));
+    ctx.save();triPath();ctx.strokeStyle=RED;ctx.lineJoin='round';
+    ctx.lineWidth=3.2/u;ctx.setLineDash([TRI_LEN*d3,TRI_LEN]);ctx.stroke();ctx.restore();
+    // active edge: the triangle side shared with the emphasised wedge brightens
+    W8.forEach((w,i)=>{const gl=st[i].glow;if(gl<=.01)return;
+      ctx.save();ctx.beginPath();ctx.moveTo(...w.edge[0]);ctx.lineTo(...w.edge[1]);
+      ctx.strokeStyle=RED;ctx.lineCap='round';ctx.globalAlpha=gl;
+      ctx.shadowColor='rgba(255,0,69,0.9)';ctx.shadowBlur=18*gl;ctx.lineWidth=6/u;ctx.stroke();ctx.restore();});
+    ctx.restore();
+  }
+
+  // on-screen lines (script copy)
+  ctx.setTransform(1,0,0,1,0,0);ctx.textAlign='left';ctx.textBaseline='alphabetic';ctx.letterSpacing='-1px';
+  const o1=env(t,22.0,23.0,26.8,27.8);
+  if(o1>0){ctx.globalAlpha=o1;ctx.fillStyle=NAVY;ctx.font='300 60px "Lexend Deca"';
+    ctx.fillText('The tradeoffs are',110,170-8*(1-o1));ctx.fillText('built into the system.',110,244-8*(1-o1));}
+  [['Safeguarding cost.',39.9],['Improving quality.',40.6],['Expanding access.',41.3]].forEach(([s,a],i)=>{
+    const o=eio(ph(t,a,a+.8))*(1-eio(ph(t,44.2,45)));if(o<=0)return;
+    ctx.globalAlpha=o;ctx.fillStyle=NAVY;ctx.font='300 50px "Lexend Deca"';ctx.fillText(s,110,150+i*66-8*(1-o));});
+  const tog=eio(ph(t,42.2,43.0))*(1-eio(ph(t,44.2,45)));
+  if(tog>0){ctx.globalAlpha=tog;ctx.fillStyle=RED;ctx.font='400 50px "Lexend Deca"';ctx.fillText('Together.',110,150+3*66+8);}
+  ctx.letterSpacing='0px';
+  const fo=ph(t,44.4,45);if(fo>0){ctx.globalAlpha=fo;ctx.fillStyle='#fff';ctx.fillRect(0,0,W,H);}
+  ctx.globalAlpha=1;
+}
+
+const imgs={};
+(async()=>{
+  imgs.dark=await loadImg('assets/dark.jpg');
+  await document.fonts.load('300 40px "Lexend Deca"');await document.fonts.load('400 40px "Lexend Deca"');
+  window.ready=true;
+})();
+window.frame=async(t,q)=>{await draw(t);return c.toDataURL('image/jpeg',q||0.92);};
+</script></body></html>

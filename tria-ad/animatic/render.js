@@ -7,7 +7,7 @@ const fs = require('fs'), path = require('path');
   const browser = await chromium.launch({ args: ['--allow-file-access-from-files', '--disable-web-security'] });
   const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
   page.on('pageerror', e => console.error('PAGEERR', e.message));
-  await page.goto('file://' + path.join(dir, 'trilemma.html'));
+  await page.goto('file://' + path.join(dir, process.env.PAGE || 'trilemma.html'));
   await page.waitForFunction(() => window.ready === true, null, { timeout: 30000 });
   if (process.argv[2] === '--stills') {
     for (const t of process.argv[3].split(',').map(Number)) {
