@@ -1,0 +1,120 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+@font-face{font-family:"Lexend Deca";src:url(assets/lexend.woff2) format("woff2");font-weight:100 900}
+@font-face{font-family:"Manrope";src:url(assets/manrope.woff2) format("woff2");font-weight:200 800}
+html,body{margin:0;background:#000}</style></head><body><canvas id="c" width="1920" height="1080"></canvas>
+<script src="config.js"></script>
+<script type="module">
+// Tria Federal Story 1 compositor (v3). Footage carries the red light trails; this page cuts the shots,
+// adds Figma-spec typography (with people in front of the type), the Trilemma section and the end card.
+import {FilesetResolver, ImageSegmenter} from './node_modules/@mediapipe/tasks-vision/vision_bundle.mjs';
+const W=1920,H=1080,FPS=24,K=1920/2752,RED='#FF0045',WEBRED='#D30038',NAVY='#1D2038',SLATE='#7A95A5',deg=Math.PI/180;
+const c=document.getElementById('c'),x=c.getContext('2d');
+const clamp=(v,a=0,b=1)=>Math.min(b,Math.max(a,v)),lerp=(a,b,t)=>a+(b-a)*t;
+const eio=t=>t<.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2, eo=t=>1-Math.pow(1-t,3), ph=(t,a,b)=>clamp((t-a)/(b-a));
+// ---------- media ----------
+const cache=new Map();
+function img(src){if(cache.has(src))return cache.get(src);const p=new Promise((r,j)=>{const i=new Image();i.onload=()=>r(i);i.onerror=()=>j(src);i.src=src;});cache.set(src,p);if(cache.size>120)cache.delete(cache.keys().next().value);return p;}
+const NF={};for(const k of window.CLIPS)NF[k.id]=k.n;
+const fr=(clip,s)=>{const N=NF[clip];let f=Math.round(s*FPS);const P=2*(N-1);f=((f%P)+P)%P;if(f>=N)f=P-f;return `frames/${clip}/${String(f+1).padStart(4,'0')}.jpg`;};
+const SH=window.SHOTS, CUTS=SH.slice(1).map(s=>s.t0), XF=0.28;
+// ---------- people matte ----------
+const fset=await FilesetResolver.forVisionTasks('./node_modules/@mediapipe/tasks-vision/wasm');
+const seg=await ImageSegmenter.createFromOptions(fset,{baseOptions:{modelAssetPath:'./assets/selfie_multiclass.tflite',delegate:'CPU'},runningMode:'IMAGE',outputConfidenceMasks:true});
+const mk=document.createElement('canvas');mk.width=W;mk.height=H;const mx=mk.getContext('2d');const tm=document.createElement('canvas');const tmx=tm.getContext('2d');
+function personLayer(im){const r=seg.segment(im);const bg=r.confidenceMasks[0];const w=bg.width,h=bg.height,a=bg.getAsFloat32Array();
+  tm.width=w;tm.height=h;const id=tmx.createImageData(w,h);for(let i=0;i<a.length;i++)id.data[i*4+3]=clamp((1-a[i]-0.15)/0.6)*255;tmx.putImageData(id,0,0);try{r.close()}catch(e){}
+  mx.globalCompositeOperation='source-over';mx.clearRect(0,0,W,H);mx.filter='blur(2px)';mx.drawImage(tm,0,0,W,H);mx.filter='none';
+  mx.globalCompositeOperation='source-in';mx.drawImage(im,0,0,W,H);mx.globalCompositeOperation='source-over';return mk;}
+// ---------- typography (Figma spec, subtle per-word animation) ----------
+function cssGrad(ang,w,hh,stops){const r=ang*deg,dx=Math.sin(r),dy=-Math.cos(r),L=Math.abs(w*dx)+Math.abs(hh*dy),cx=w/2,cy=hh/2;
+  const g=x.createLinearGradient(cx-dx*L/2,cy-dy*L/2,cx+dx*L/2,cy+dy*L/2);stops.forEach(([p,col])=>g.addColorStop(p,col));return g;}
+function drawText(t,s,im,alpha){
+  const T=s.txt;const people=s.people&&im;
+  if(!T){if(people){x.save();x.globalAlpha=alpha;x.drawImage(personLayer(im),0,0);x.restore();}return;}
+  const size=T.size||174.4,track=T.track!==undefined?T.track:-10.47,x0=160*K,top=160*K;
+  const out=T.keep?0:eio(ph(t,s.t1-0.6,s.t1-0.12));
+  const g=eio(ph(t,T.at[0]-0.35,T.at[0]+0.45))*(1-out)*alpha;
+  if(g>0){x.save();x.globalAlpha=g;
+    if(T.mode==='light'){const hh=375*K,gr=x.createLinearGradient(0,0,0,hh);gr.addColorStop(0,'rgba(255,255,255,1)');gr.addColorStop(1,'rgba(255,255,255,0)');x.fillStyle=gr;x.fillRect(0,0,W,hh);}
+    else if(T.mode==='leftdark'){const w=1534*K;x.fillStyle=cssGrad(89.34,w,H,[[0.19392,'rgba(17,19,34,1)'],[0.74731,'rgba(17,19,34,0)']]);x.fillRect(0,0,w,H);}
+    else if(T.mode==='topdark'){const hh=671*K;x.fillStyle=cssGrad(169.70,W,hh,[[0.08185,'rgba(17,19,34,1)'],[0.67494,'rgba(17,19,34,0)']]);x.fillRect(0,0,W,hh);}
+    x.restore();}
+  x.save();x.font=`400 ${size}px "Lexend Deca"`;x.letterSpacing=`${track}px`;x.textBaseline='alphabetic';
+  const cap=x.measureText('H').actualBoundingBoxAscent;
+  T.lines.forEach((line,i)=>{const words=line.split(' ');let cx=x0;const by=top+cap+i*size*(T.lh||1.0);
+    words.forEach((wd,j)=>{const st=T.at[i]-0.1+j*0.09;const a=eo(ph(t,st,st+0.7))*(1-out)*alpha;const wW=x.measureText(wd+' ').width;
+      if(a>0){x.save();x.globalAlpha=a;x.fillStyle=T.cols?T.cols[i]:NAVY;
+        if(T.mode!=='light'){x.shadowColor='rgba(0,0,0,0.25)';x.shadowBlur=10*K;x.shadowOffsetX=10*K;x.shadowOffsetY=10*K;}
+        const blur=(1-a)*5;if(blur>0.3)x.filter=`blur(${blur.toFixed(1)}px)`;
+        x.fillText(wd,cx,by+22*(1-a));x.restore();}
+      cx+=wW;});});
+  x.restore();
+  if(people){x.save();x.globalAlpha=alpha;x.drawImage(personLayer(im),0,0);x.restore();}
+}
+async function drawShot(s,t,alpha){const im=await img(fr(s.clip,s.in+(t-s.t0)*(s.speed||1)));x.save();x.globalAlpha=alpha;x.drawImage(im,0,0,W,H);x.restore();drawText(t,s,im,alpha);}
+// ---------- Trilemma ----------
+const TR=window.TRI;const R=258.5,TP=[0,152.205-258.5],RP=[350.525-258.5,311.634-258.5],LP=[166.434-258.5,311.634-258.5];
+const TRI_LEN=3*Math.hypot(RP[0]-LP[0],RP[1]-LP[1]);
+const WG=[{clip:TR.cost,in:0.6,a0:30*deg,a1:150*deg,inner:[RP,LP],color:SLATE,bis:90*deg,at:TR.at[0],f:[.62,.45],z:1.2},
+          {clip:TR.quality,in:0.6,a0:-90*deg,a1:30*deg,inner:[TP,RP],color:RED,bis:-30*deg,at:TR.at[1],f:[.70,.45],z:1.3},
+          {clip:TR.access,in:0.6,a0:150*deg,a1:270*deg,inner:[LP,TP],color:NAVY,bis:210*deg,at:TR.at[2],f:[.45,.42],z:1.3}];
+for(const w of WG){const p=[w.inner[0],w.inner[1]];for(let i=0;i<=24;i++){const a=lerp(w.a0,w.a1,i/24);p.push([R*Math.cos(a),R*Math.sin(a)]);}
+  const xs=p.map(q=>q[0]),ys=p.map(q=>q[1]);w.bb=[Math.min(...xs),Math.min(...ys),Math.max(...xs),Math.max(...ys)];}
+function wPath(w){x.beginPath();x.moveTo(...w.inner[0]);x.lineTo(R*Math.cos(w.a0),R*Math.sin(w.a0));x.arc(0,0,R,w.a0,w.a1,false);x.lineTo(...w.inner[1]);x.closePath();}
+function triPath(){x.beginPath();x.moveTo(...TP);x.lineTo(...RP);x.lineTo(...LP);x.closePath();}
+function cover(im,bx,by,bw,bh,fx,fy,z){const s=Math.max(bw/im.width,bh/im.height)*z,iw=im.width*s,ih=im.height*s;let ox=bx+bw/2-fx*iw,oy=by+bh/2-fy*ih;ox=Math.min(bx,Math.max(bx+bw-iw,ox));oy=Math.min(by,Math.max(by+bh-ih,oy));x.drawImage(im,ox,oy,iw,ih);}
+function lightBg(){const g=x.createRadialGradient(1300,540,100,1300,540,1300);g.addColorStop(0,'#FFFFFF');g.addColorStop(1,'#E4EAED');x.fillStyle=g;x.fillRect(0,0,W,H);}
+async function trilemma(t,alpha){const tau=t-TR.t0,CX=1360,CY=540,U=760/517;
+  const ims=await Promise.all(WG.map(w=>img(fr(w.clip,w.in+tau*0.9))));
+  x.save();x.globalAlpha=alpha;lightBg();x.translate(CX,CY);x.scale(U,U);
+  [1.265,1.563,1.853].forEach((f,i)=>{const p=eo(ph(tau,.1+i*.25,1.6+i*.25));const g=x.createLinearGradient(-R*2,-R*2,R*2,R*2);g.addColorStop(0,'rgba(255,0,69,0.06)');g.addColorStop(1,'rgba(255,0,69,0.7)');
+    x.globalAlpha=alpha*p;x.strokeStyle=g;x.lineWidth=1.8/U;x.beginPath();x.arc(0,0,R*f*lerp(.6,1,p),0,2*Math.PI);x.stroke();});
+  for(let n=0;n<6;n++){const q=(tau-5.2)/1.6-n*0.6;if(q<0||q>1.3)continue;const qq=clamp(q/1.3);x.globalAlpha=alpha*.45*(1-qq);x.strokeStyle=RED;x.lineWidth=2/U;x.beginPath();x.arc(0,0,R*lerp(1,2.2,eo(qq)),0,2*Math.PI);x.stroke();}
+  x.rotate(-18*deg*(1-eo(ph(tau,0.4,2.0))));
+  const allOn=TR.at[2]+0.9;
+  WG.forEach((w,i)=>{const rv=eo(ph(tau,0.5+i*.22,1.7+i*.22));if(rv<=0)return;const on=ph(t,w.at-0.1,w.at+0.5);const later=WG.some(v=>v.at>w.at&&t>v.at);
+    const emph=t<allOn?on*(later?0.4:1):1;
+    x.save();x.globalAlpha=alpha*clamp(rv*1.4);x.beginPath();x.arc(0,0,lerp(60,R,rv),0,2*Math.PI);x.clip();wPath(w);x.clip();
+    x.filter=`saturate(${0.6+0.4*emph}) brightness(${0.93+0.09*emph})`;const[x0,y0,x1,y1]=w.bb;cover(ims[i],x0,y0,x1-x0,y1-y0,w.f[0],w.f[1],w.z*(1+0.05*emph));x.filter='none';
+    const ox=Math.cos(w.bis)*R,oy=Math.sin(w.bis)*R,g=x.createLinearGradient(ox,oy,ox*.15,oy*.15);g.addColorStop(0,w.color+'99');g.addColorStop(.55,w.color+'00');x.fillStyle=g;x.fillRect(x0,y0,x1-x0,y1-y0);x.restore();});
+  x.save();triPath();x.fillStyle='#FFFFFF';x.globalAlpha=alpha;x.fill();x.restore();
+  x.save();triPath();x.strokeStyle=RED;x.lineJoin='round';x.lineWidth=3.4/U;x.globalAlpha=alpha;x.setLineDash([TRI_LEN*eio(ph(tau,0.2,1.3)),TRI_LEN]);x.stroke();x.restore();
+  WG.forEach(w=>{const gl=ph(t,w.at-0.1,w.at+0.4)*(1-ph(t,w.at+1.6,w.at+2.4))+(t>allOn?0.7*ph(t,allOn,allOn+0.5):0);if(gl<=0)return;
+    x.save();x.beginPath();x.moveTo(...w.inner[0]);x.lineTo(...w.inner[1]);x.strokeStyle=RED;x.lineCap='round';x.globalAlpha=alpha*gl;x.shadowColor='rgba(255,0,69,0.9)';x.shadowBlur=18*gl;x.lineWidth=6/U;x.stroke();x.restore();});
+  x.restore();
+  const L=[['Safeguarding cost',TR.at[0],SLATE],['Improving quality',TR.at[1],NAVY],['Expanding access',TR.at[2],WEBRED]];
+  x.save();x.font='400 88px "Lexend Deca"';x.letterSpacing='-5.3px';
+  L.forEach(([s,a,col],i)=>{let cx=110;s.split(' ').forEach((wd,j)=>{const st=a-0.1+j*0.09;const o=eo(ph(t,st,st+0.7))*alpha;const ww=x.measureText(wd+' ').width;
+    if(o>0){x.save();x.globalAlpha=o;x.fillStyle=col;const b=(1-o)*5;if(b>0.3)x.filter=`blur(${b.toFixed(1)}px)`;x.fillText(wd,cx,410+i*104+20*(1-o));x.restore();}cx+=ww;});});
+  x.restore();}
+// ---------- end card (Figma Slide_Cover; live video through the Tria Arc) ----------
+const EC=window.END;const endVis=await img('assets/end_visual.png');const endLogo=await img('assets/end_logo.svg');const endVec=await img('assets/end_vec1.svg').catch(()=>null);
+const ecv=document.createElement('canvas');ecv.width=W;ecv.height=H;const ecx=ecv.getContext('2d');
+async function endCard(t,alpha){const tau=t-EC.t0;const vid=await img(fr(EC.clip,0.4+Math.max(0,tau)*0.9));
+  x.save();x.globalAlpha=alpha;const g=x.createLinearGradient(0,0,W,0);g.addColorStop(0,'#FFFFFF');g.addColorStop(1,'#E4EAED');x.fillStyle=g;x.fillRect(0,0,W,H);
+  const sc=1.10+0.03*ph(tau,0,7.6);ecx.globalCompositeOperation='source-over';ecx.clearRect(0,0,W,H);
+  ecx.save();ecx.translate(W*0.70,H*0.56);ecx.scale(sc,sc);ecx.drawImage(vid,-W*0.47,-H*0.52,W,H);ecx.restore();
+  const wg=ecx.createLinearGradient(0,0,W*0.66,0);wg.addColorStop(0,'rgba(255,255,255,0.96)');wg.addColorStop(0.62,'rgba(255,255,255,0.72)');wg.addColorStop(1,'rgba(255,255,255,0)');ecx.fillStyle=wg;ecx.fillRect(0,0,W,H);
+  ecx.globalCompositeOperation='destination-in';ecx.drawImage(endVis,0,0,W,H);
+  const rv=eio(ph(tau,0.05,1.7));if(rv<1){ecx.beginPath();ecx.rect(0,0,W,H);ecx.arc(W*0.66,H*0.40,Math.max(1,2400*rv),0,2*Math.PI,true);ecx.globalCompositeOperation='destination-out';ecx.fill('evenodd');}
+  ecx.globalCompositeOperation='source-over';x.drawImage(ecv,0,0);
+  if(endVec)x.drawImage(endVec,2236*K-1.4,1036.3*K-1,60.03*K,28.12*K);
+  const lo=eio(ph(tau,0.7,1.4));x.globalAlpha=alpha*lo;x.drawImage(endLogo,160*K,160*K-10*(1-lo),452*K,160*K);
+  x.font='400 '+(160.533*K)+'px "Lexend Deca"';x.letterSpacing=(-6.4213*K)+'px';x.fillStyle='#111322';const cap=x.measureText('H').actualBoundingBoxAscent;
+  ['Powering the','Systems Behind','Federal Health'].forEach((l,i)=>{const a=eo(ph(tau,1.0+i*0.2,1.7+i*0.2));x.globalAlpha=alpha*a;const b=(1-a)*5;x.filter=b>0.3?`blur(${b.toFixed(1)}px)`:'none';x.fillText(l,160*K,922*K+cap+i*160.533*K*1.1+18*(1-a));});
+  x.filter='none';x.restore();}
+// ---------- frame ----------
+window.frame=async(t,q)=>{
+  x.setTransform(1,0,0,1,0,0);x.globalAlpha=1;x.filter='none';x.fillStyle='#000';x.fillRect(0,0,W,H);
+  if(t<TR.t0-XF){const i=SH.findIndex(s=>t>=s.t0&&t<s.t1);const cur=SH[i<0?SH.length-1:i],nxt=SH[SH.indexOf(cur)+1],prv=SH[SH.indexOf(cur)-1];
+    if(prv&&t<cur.t0+XF){const u=eio(clamp((t-(cur.t0-XF))/(2*XF)));await drawShot(prv,t,1);await drawShot(cur,t,u);}
+    else if(nxt&&t>cur.t1-XF){const u=eio(clamp((t-(cur.t1-XF))/(2*XF)));await drawShot(cur,t,1);await drawShot(nxt,t,u);}
+    else await drawShot(cur,t,1);
+    if(t<0.8){x.fillStyle=`rgba(255,255,255,${1-eio(t/0.8)})`;x.fillRect(0,0,W,H);}}
+  else if(t<TR.t0+XF){await drawShot(SH[SH.length-1],t,1);await trilemma(t,eio(clamp((t-(TR.t0-XF))/(2*XF))));}
+  else if(t<EC.t0){await trilemma(t,1);}
+  else if(t<EC.t0+0.5){await trilemma(t,1);await endCard(t,eio(ph(t,EC.t0,EC.t0+0.5)));}
+  else await endCard(t,1);
+  return c.toDataURL('image/jpeg',q||0.93);};
+await document.fonts.load('400 40px "Lexend Deca"');window.ready=true;
+</script></body></html>
